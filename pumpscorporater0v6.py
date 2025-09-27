@@ -646,8 +646,37 @@ if st.session_state.get("authentication_status"):
     except Exception as e:
         st.error(f"Ocorreu um erro inesperado durante a execução. Detalhe: {str(e)}")
 
-elif st.session_state.get("authentication_status") is False:
+# INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS
+
+if st.session_state["authentication_status"] == False:
     st.error('Usuário/senha incorreto')
-elif st.session_state.get("authentication_status") is None:
+elif st.session_state["authentication_status"] == None:
     st.title("Bem-vindo à Plataforma de Análise de Redes Hidráulicas")
     st.warning('Por favor, insira seu usuário e senha para começar.')
+
+    # --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
+    with st.expander("🔑 Criar Nova Conta"):
+        new_username = st.text_input("Novo Usuário")
+        new_name = st.text_input("Seu Nome Completo")
+        new_password = st.text_input("Nova Senha", type='password')
+        new_password_confirm = st.text_input("Confirme a Senha", type='password')
+
+        if st.button("Registrar"):
+            if new_username and new_name and new_password and new_password_confirm:
+                if new_password == new_password_confirm:
+                    # Aqui usamos a função add_user do seu database.py
+                    if add_user(new_username, stauth.Hasher([new_password]).generate()[0], new_name):
+                        st.success("Usuário registrado com sucesso! Por favor, faça login.")
+                        # Opcional: Limpar campos após registro
+                        st.session_state.new_username = ""
+                        st.session_state.new_name = ""
+                        st.session_state.new_password = ""
+                        st.session_state.new_password_confirm = ""
+                        st.rerun() # Para forçar a atualização e talvez esconder o formulário de registro
+                    else:
+                        st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
+                else:
+                    st.error("As senhas não coincidem.")
+            else:
+                st.warning("Por favor, preencha todos os campos para registrar.")
+    # --- FIM SEÇÃO DE REGISTRO ---
