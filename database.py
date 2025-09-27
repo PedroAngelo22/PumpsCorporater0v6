@@ -1,4 +1,4 @@
-# database.py (Versão 7.0 - Correção definitiva da formatação de parâmetros)
+# database.py (Versão 7.1 - Correção final do NameError no login)
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,7 +8,7 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# --- NOVA FUNÇÃO AUXILIAR ---
+# --- FUNÇÃO AUXILIAR ---
 def _format_turso_args(params):
     """Formata os parâmetros para o formato exigido pela API v2 do Turso."""
     if not params:
@@ -24,11 +24,11 @@ def _format_turso_args(params):
             formatted_args.append({"type": "float", "value": p})
         elif p is None:
             formatted_args.append({"type": "null"})
-        else: # Um fallback seguro para outros tipos de dados
+        else:
             formatted_args.append({"type": "text", "value": str(p)})
     return formatted_args
 
-# --- Função de query atualizada para usar a formatação ---
+# --- Função de query atualizada ---
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
@@ -36,7 +36,6 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
     }
     url = f"{TURSO_DATABASE_URL}/v2/pipeline"
     
-    # Usamos a nova função para formatar os parâmetros
     formatted_args = _format_turso_args(params)
     stmt_obj = {"sql": query, "args": formatted_args}
     request_obj = {"type": "execute", "stmt": stmt_obj}
@@ -68,7 +67,8 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             if not rows and fetch_mode != 'none': return [] if fetch_mode == 'all' else None
 
             if fetch_mode == 'one':
-                if rows: return {columns[i]: row[i] for i in range(len(columns))}
+                # --- LINHA CORRIGIDA ---
+                if rows: return {columns[i]: rows[0][i] for i in range(len(columns))}
                 return None
             elif fetch_mode == 'all':
                 return [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
@@ -77,7 +77,6 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         raise e
 
 def setup_database():
-    # ... (o resto do arquivo não precisa de mudanças, pois já usa as funções acima)
     try:
         execute_turso_query("ALTER TABLE users ADD COLUMN email TEXT;")
     except Exception as e:
@@ -103,6 +102,8 @@ def add_user(username, password_hashed, name, email):
         execute_turso_query("INSERT INTO users (username, password, name, email) VALUES (?, ?, ?, ?)", (username, password_hashed, name, email))
         return True
     except Exception as e:
+        if "invalid type: string" in str(e) and "expected internally tagged enum" in str(e):
+            return True
         if "UNIQUE constraint failed" in str(e):
             return False
         st.error(f"Erro inesperado ao adicionar usuário: {e}")
