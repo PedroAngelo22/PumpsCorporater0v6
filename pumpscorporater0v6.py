@@ -686,8 +686,7 @@ with st.expander("🔑 Criar Nova Conta"):
                 st.error("Todos os campos marcados com * são obrigatórios.")
             else:
                 try:
-                    # --- LINHA CORRIGIDA ---
-                    hashed_password = stauth.Hasher().generate([new_password])[0]
+                    hashed_password = stauth.Hasher([new_password]).hashed_passwords[0]
                     
                     if add_user(new_username, hashed_password, new_name, new_email):
                         st.success("Usuário registrado com sucesso! Por favor, faça login acima.")
