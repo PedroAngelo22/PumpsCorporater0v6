@@ -654,38 +654,47 @@ if st.session_state.get("authentication_status"):
     except Exception as e:
         st.error(f"Ocorreu um erro inesperado durante a execução. Detalhe: {str(e)}")
 
-# INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS
+# --- INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS (VERSÃO CORRIGIDA) ---
 
 if st.session_state["authentication_status"] == False:
     st.error('Usuário/senha incorreto')
+    # Adicionando link para registro caso o login falhe
+    st.info('Ainda não tem uma conta? Expanda a seção "Criar Nova Conta" abaixo para se registrar.')
+
 elif st.session_state["authentication_status"] == None:
     st.title("Bem-vindo à Plataforma de Análise de Redes Hidráulicas")
     st.warning('Por favor, insira seu usuário e senha para começar.')
 
-    # --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
-    with st.expander("🔑 Criar Nova Conta"):
-        # Usamos um formulário para agrupar os campos
-        with st.form("register_form", clear_on_submit=True):
-            new_username = st.text_input("Novo Usuário")
-            new_name = st.text_input("Seu Nome Completo")
-            new_email = st.text_input("Seu Email") # Adicionado campo de email
-            new_password = st.text_input("Nova Senha", type='password')
-            new_password_confirm = st.text_input("Confirme a Senha", type='password')
-            
-            submitted = st.form_submit_button("Registrar")
-            if submitted:
-                if new_username and new_name and new_password and new_password_confirm and new_email:
-                    if new_password == new_password_confirm:
-                        # Gera o hash da senha
-                        hashed_password = stauth.Hasher([new_password]).generate()[0]
-                        # Chama a função add_user importada do database.py
-                        if add_user(new_username, hashed_password, new_name, new_email):
-                            st.success("Usuário registrado com sucesso! Por favor, faça login.")
-                            # Não precisa limpar os campos por causa do clear_on_submit=True
-                        else:
-                            st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
+# --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
+# Movida para fora do bloco 'elif' para estar sempre visível antes do login
+with st.expander("🔑 Criar Nova Conta"):
+    with st.form("register_form", clear_on_submit=True):
+        st.subheader("Formulário de Registro")
+        new_username = st.text_input("Novo Usuário*")
+        new_name = st.text_input("Seu Nome Completo*")
+        new_email = st.text_input("Seu Email*")
+        new_password = st.text_input("Nova Senha*", type='password')
+        new_password_confirm = st.text_input("Confirme a Senha*", type='password')
+        
+        submitted = st.form_submit_button("Registrar")
+        if submitted:
+            # 1. Validação de senhas primeiro
+            if not new_password or not new_password_confirm:
+                st.error("Os campos de senha não podem estar em branco.")
+            elif new_password != new_password_confirm:
+                st.error("As senhas não coincidem.")
+            # 2. Validação de outros campos
+            elif not new_username or not new_name or not new_email:
+                st.error("Todos os campos marcados com * são obrigatórios.")
+            # 3. Se tudo estiver ok, prossiga com a criptografia e registro
+            else:
+                try:
+                    hashed_password = stauth.Hasher([new_password]).generate()[0]
+                    if add_user(new_username, hashed_password, new_name, new_email):
+                        st.success("Usuário registrado com sucesso! Por favor, faça login acima.")
                     else:
-                        st.error("As senhas não coincidem.")
-                else:
-                    st.warning("Por favor, preencha todos os campos para registrar.")
-    # --- FIM SEÇÃO DE REGISTRO ---
+                        st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
+                except Exception as e:
+                    st.error(f"Ocorreu um erro inesperado durante o registro: {e}")
+
+# --- FIM SEÇÃO DE REGISTRO ---
