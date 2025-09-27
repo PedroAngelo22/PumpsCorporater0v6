@@ -1,3 +1,6 @@
+# app.py (Versão 7.0 - Com sistema de autenticação customizado)
+
+# --- Importações Essenciais ---
 import streamlit as st
 import pandas as pd
 import math
@@ -9,15 +12,14 @@ import matplotlib.pyplot as plt
 import io
 import yaml
 from yaml.loader import SafeLoader
-import streamlit_authenticator as stauth
+import bcrypt # Importamos bcrypt diretamente
 
-# Importando as funções do banco de dados e do gerador de relatórios
-
+# Importando as funções do banco de dados
 from database import (
     setup_database, save_scenario, load_scenario, get_user_projects,
     get_scenarios_for_project, delete_scenario, add_user_fluid, get_user_fluids,
     delete_user_fluid, add_user_material, get_user_materials, delete_user_material,
-    add_user, get_all_users_for_auth # Adicione estas duas
+    add_user, get_user # Funções que vamos usar para o login
 )
 from report_generator import generate_report
 
@@ -25,7 +27,6 @@ from report_generator import generate_report
 st.set_page_config(layout="wide", page_title="Análise de Redes Hidráulicas")
 plt.style.use('seaborn-v0_8-whitegrid')
 
-# BIBLIOTECAS PADRÃO
 MATERIAIS_PADRAO = {
     "Aço Carbono (novo)": 0.046, "Aço Carbono (pouco uso)": 0.1, "Aço Carbono (enferrujado)": 0.2,
     "Aço Inox": 0.002, "Ferro Fundido": 0.26, "PVC / Plástico": 0.0015, "Concreto": 0.5
@@ -42,7 +43,7 @@ K_FACTORS = {
     "Curva de Retorno 180°": 2.2, "Tê (Fluxo Direto)": 0.6, "Tê (Fluxo Lateral)": 1.8,
 }
 
-# --- FUNÇÕES DE CÁLCULO ---
+# --- FUNÇÕES DE CÁLCULO E UI ---
 def calcular_perda_serie(lista_trechos, vazao_m3h, fluido_selecionado, materiais_combinados, fluidos_combinados):
     perda_total = 0
     if not lista_trechos:
@@ -268,28 +269,73 @@ def adicionar_acessorio(id_trecho, lista_trechos):
             trecho["acessorios"].append({"nome": nome_acessorio, "k": K_FACTORS[nome_acessorio], "quantidade": int(quantidade)})
             break
 
-# --- INICIALIZAÇÃO E AUTENTICAÇÃO ---
+# --- INICIALIZAÇÃO DO BANCO DE DADOS ---
 setup_database()
 
-# CARREGA AS CREDENCIAIS DO BANCO DE DADOS
-credentials = get_all_users_for_auth() 
+# --- NOSSO NOVO SISTEMA DE AUTENTICAÇÃO ---
 
-# Carrega a configuração do cookie do arquivo yaml
-with open('config.yaml') as file:
-    config = yaml.load(file, Loader=SafeLoader)
+def render_login_page():
+    """Renderiza os formulários de login e registro."""
+    st.title("Plataforma de Análise de Redes Hidráulicas")
+    
+    col1, col2 = st.columns([1.2, 1])
 
-authenticator = stauth.Authenticate(
-    credentials, # Usa as credenciais do banco de dados
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
-)
-authenticator.login()
+    with col1:
+        st.subheader("Login")
+        with st.form("login_form"):
+            username = st.text_input("Usuário")
+            password = st.text_input("Senha", type="password")
+            login_submitted = st.form_submit_button("Login")
+
+            if login_submitted:
+                user_data = get_user(username)
+                if user_data and user_data.get('password'):
+                    hashed_password_from_db = user_data['password'].encode('utf-8')
+                    if bcrypt.checkpw(password.encode('utf-8'), hashed_password_from_db):
+                        st.session_state['authentication_status'] = True
+                        st.session_state['username'] = user_data['username']
+                        st.session_state['name'] = user_data['name']
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha incorreto.")
+                else:
+                    st.error("Usuário ou senha incorreto.")
+
+    with col2:
+        st.subheader("Criar Nova Conta")
+        with st.form("register_form", clear_on_submit=True):
+            new_username = st.text_input("Novo Usuário*")
+            new_name = st.text_input("Seu Nome Completo*")
+            new_email = st.text_input("Seu Email*")
+            new_password = st.text_input("Nova Senha*", type="password")
+            new_password_confirm = st.text_input("Confirme a Senha*", type="password")
+            register_submitted = st.form_submit_button("Registrar")
+
+            if register_submitted:
+                if not new_password or new_password != new_password_confirm:
+                    st.error("As senhas não coincidem ou estão em branco.")
+                elif not all([new_username, new_name, new_email]):
+                    st.error("Por favor, preencha todos os campos obrigatórios.")
+                else:
+                    # Criptografa a senha usando bcrypt
+                    hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+                    if add_user(new_username, hashed_password, new_name, new_email):
+                        st.success("Usuário registrado com sucesso! Por favor, faça o login.")
+                    else:
+                        st.error("Este nome de usuário já existe.")
+
 
 # --- LÓGICA PRINCIPAL DA APLICAÇÃO ---
-if st.session_state.get("authentication_status"):
+
+# Verifica se o usuário está logado. Se não, mostra a página de login/registro.
+if not st.session_state.get('authentication_status'):
+    render_login_page()
+else:
+    # Se o usuário está logado, executa a aplicação principal.
     name = st.session_state['name']
     username = st.session_state['username']
+
+    # INICIALIZAÇÃO DO st.session_state
     if 'trechos_succao' not in st.session_state: st.session_state.trechos_succao = []
     if 'trechos_antes' not in st.session_state: st.session_state.trechos_antes = []
     if 'trechos_depois' not in st.session_state: st.session_state.trechos_depois = []
@@ -297,7 +343,6 @@ if st.session_state.get("authentication_status"):
     if 'curva_altura_df' not in st.session_state:
         st.session_state.curva_altura_df = pd.DataFrame([{"Vazão (m³/h)": 0, "Altura (m)": 40}, {"Vazão (m³/h)": 50, "Altura (m)": 35}, {"Vazão (m³/h)": 100, "Altura (m)": 25}])
     if 'curva_eficiencia_df' not in st.session_state:
-        # *** VALOR PADRÃO DA EFICIÊNCIA EM Q=0 ATUALIZADO PARA 50% ***
         st.session_state.curva_eficiencia_df = pd.DataFrame([{"Vazão (m³/h)": 0, "Eficiência (%)": 50}, {"Vazão (m³/h)": 50, "Eficiência (%)": 70}, {"Vazão (m³/h)": 100, "Eficiência (%)": 65}])
     if 'curva_npshr_df' not in st.session_state:
         st.session_state.curva_npshr_df = pd.DataFrame([{"Vazão (m³/h)": 0, "NPSHr (m)": 2}, {"Vazão (m³/h)": 50, "NPSHr (m)": 3}, {"Vazão (m³/h)": 100, "NPSHr (m)": 5}])
@@ -309,12 +354,21 @@ if st.session_state.get("authentication_status"):
     if 'h_estatica_succao' not in st.session_state: st.session_state.h_estatica_succao = 2.0
     if 'suction_tank_type' not in st.session_state: st.session_state.suction_tank_type = "Atmosférico"
     if 'suction_tank_pressure' not in st.session_state: st.session_state.suction_tank_pressure = 0.0
+    
     user_fluids = get_user_fluids(username)
     fluidos_combinados = {**FLUIDOS_PADRAO, **user_fluids}
     user_materials = get_user_materials(username)
     materiais_combinados = {**MATERIAIS_PADRAO, **user_materials}
+
+    # --- INÍCIO DA SIDEBAR ---
     with st.sidebar:
         st.header(f"Bem-vindo(a), {name}!")
+        if st.button("Logout"):
+            # Limpa o estado da sessão para fazer logout
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+        
         st.divider()
         st.header("🚀 Gestão de Projetos e Cenários")
         user_projects = get_user_projects(username)
@@ -376,8 +430,6 @@ if st.session_state.get("authentication_status"):
                 st.rerun()
             else:
                 st.warning("É necessário um nome para o Projeto e para o Cenário.")
-        st.divider()
-        authenticator.logout('Logout', 'sidebar')
         st.divider()
         with st.expander("📚 Gerenciador da Biblioteca"):
             st.subheader("Fluidos Customizados")
@@ -485,8 +537,7 @@ if st.session_state.get("authentication_status"):
             c1, c2 = st.columns(2); c1.button("Adicionar Trecho (Depois)", on_click=adicionar_item, args=("trechos_depois",), use_container_width=True); c2.button("Remover Trecho (Depois)", on_click=remover_ultimo_item, args=("trechos_depois",), use_container_width=True)
         st.divider(); st.header("🔌 Equipamentos e Custo"); rend_motor = st.slider("Eficiência do Motor (%)", 1, 100, 90); horas_por_dia = st.number_input("Horas por Dia", 1.0, 24.0, 8.0, 0.5); tarifa_energia = st.number_input("Custo da Energia (R$/kWh)", 0.10, 5.00, 0.75, 0.01, format="%.2f")
 
-    # --- CORPO PRINCIPAL DA APLICAÇÃO ---
-    st.title("💧 Análise de Redes de Bombeamento com Curva de Bomba")
+    # --- INÍCIO DO CORPO PRINCIPAL DA APLICAÇÃO ---
     try:
         sistema_succao_atual = st.session_state.trechos_succao
         sistema_recalque_atual = {'antes': st.session_state.trechos_antes, 'paralelo': st.session_state.ramais_paralelos, 'depois': st.session_state.trechos_depois}
@@ -536,36 +587,27 @@ if st.session_state.get("authentication_status"):
             if margem_npsh <= 0:
                 st.error(f"**ALERTA DE CAVITAÇÃO!** NPSH Disponível ({npsha_op:.2f} m) é menor ou igual ao Requerido ({npshr_op:.2f} m). Risco iminente de danos à bomba.")
             elif margem_npsh < 1.5:
-                 st.warning(f"**Atenção:** Margem de NPSH ({margem_npsh:.2f} m) é baixa. Recomenda-se uma margem de segurança maior para evitar cavitação.")
+                st.warning(f"**Atenção:** Margem de NPSH ({margem_npsh:.2f} m) é baixa. Recomenda-se uma margem de segurança maior para evitar cavitação.")
             st.metric("Custo Anual", f"R$ {resultados_energia['custo_anual']:.2f}")
             st.divider()
             st.header("📈 Gráficos de Análise Operacional")
             
-            # --- INÍCIO DO BLOCO DE VISUALIZAÇÃO CORRIGIDO ---
-
-            # Determinar a faixa de vazão confiável com base nos dados do usuário
             min_q_confiavel = st.session_state.curva_altura_df['Vazão (m³/h)'].min()
             max_q_confiavel = st.session_state.curva_altura_df['Vazão (m³/h)'].max()
             
             max_plot_vazao = max(vazao_op * 1.5, max_q_confiavel * 1.2) if vazao_op else max_q_confiavel * 1.2
             vazao_range = np.linspace(0, max_plot_vazao, 200)
 
-            # Máscaras para separar dados de interpolação e extrapolação
             mask_confiavel = (vazao_range >= min_q_confiavel) & (vazao_range <= max_q_confiavel)
 
-            # --- Gráfico Principal: Curva da Bomba vs. Sistema ---
             fig_curvas, ax_curvas = plt.subplots(figsize=(8, 5))
             altura_bomba_curve = func_curva_bomba(vazao_range)
             altura_sistema_curve = np.array([func_curva_sistema(q) if func_curva_sistema(q) < 1e10 else np.nan for q in vazao_range])
             
-            # Plotar a curva do sistema (sempre sólida)
             ax_curvas.plot(vazao_range, altura_sistema_curve, label='Curva do Sistema', color='seagreen', lw=2)
-            
-            # Plotar a curva da bomba com estilos diferentes
             ax_curvas.plot(vazao_range, altura_bomba_curve, color='royalblue', linestyle='--', alpha=0.5, lw=2, label='Curva da Bomba (Extrapolada)')
             ax_curvas.plot(vazao_range[mask_confiavel], altura_bomba_curve[mask_confiavel], color='royalblue', linestyle='-', lw=2, label='Curva da Bomba (Dados)')
             
-            # Ponto de Operação
             label_ponto_op = f'Ponto de Operação ({vazao_op:.1f} m³/h, {altura_op:.1f} m)'
             ax_curvas.scatter(vazao_op, altura_op, color='red', s=100, zorder=5, label=label_ponto_op)
             
@@ -574,23 +616,19 @@ if st.session_state.get("authentication_status"):
             plt.close(fig_curvas)
             st.divider()
 
-            # --- Geração dos Dados para os Novos Gráficos ---
             min_q_eff_confiavel = st.session_state.curva_eficiencia_df['Vazão (m³/h)'].min()
             max_q_eff_confiavel = st.session_state.curva_eficiencia_df['Vazão (m³/h)'].max()
             mask_confiavel_eff = (vazao_range >= min_q_eff_confiavel) & (vazao_range <= max_q_eff_confiavel)
             
-            # Dados da Curva de Potência
             eficiencia_bomba_curve = func_curva_eficiencia(vazao_range)
-            eficiencia_bomba_curve[~mask_confiavel_eff] = np.nan # Define como NaN fora da faixa de confiança
-            eficiencia_bomba_curve[eficiencia_bomba_curve <= 1.0] = np.nan # Remove valores irreais mesmo dentro da faixa
+            eficiencia_bomba_curve[~mask_confiavel_eff] = np.nan
+            eficiencia_bomba_curve[eficiencia_bomba_curve <= 1.0] = np.nan
             potencia_eletrica_kw_curve = (vazao_range / 3600 * rho_selecionado * 9.81 * altura_bomba_curve) / ((eficiencia_bomba_curve / 100) * (rend_motor / 100)) / 1000
 
-            # Dados da Curva de NPSH
             npshr_curve = func_curva_npshr(vazao_range)
             perdas_succao_curve = np.array([calcular_perda_serie(sistema_succao_atual, q, st.session_state.fluido_selecionado, materiais_combinados, fluidos_combinados) for q in vazao_range])
             npsha_curve = h_superficie_m + st.session_state.h_estatica_succao - perdas_succao_curve - h_vapor_m
             
-            # --- Layout dos Novos Gráficos ---
             col1, col2 = st.columns(2)
             
             with col1:
@@ -615,8 +653,7 @@ if st.session_state.get("authentication_status"):
                 ax_npsh.set_title("NPSH vs. Vazão"); ax_npsh.set_xlabel("Vazão (m³/h)"); ax_npsh.set_ylabel("Altura (m)"); ax_npsh.legend(); ax_npsh.grid(True); ax_npsh.set_ylim(bottom=0)
                 st.pyplot(fig_npsh)
                 plt.close(fig_npsh)
-            # --- Fim do Bloco Corrigido ---
-
+            
             st.divider()
             st.header("📄 Exportar Relatório")
             params_data = {
@@ -653,46 +690,3 @@ if st.session_state.get("authentication_status"):
             st.error("Não foi possível encontrar um ponto de operação. Verifique os parâmetros.")
     except Exception as e:
         st.error(f"Ocorreu um erro inesperado durante a execução. Detalhe: {str(e)}")
-
-# app.py (substitua a seção final por este código)
-
-# --- INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS (VERSÃO CORRIGIDA FINAL) ---
-
-if st.session_state["authentication_status"] == False:
-    st.error('Usuário/senha incorreto')
-    st.info('Ainda não tem uma conta? Expanda a seção "Criar Nova Conta" abaixo para se registrar.')
-
-elif st.session_state["authentication_status"] == None:
-    st.title("Bem-vindo à Plataforma de Análise de Redes Hidráulicas")
-    st.warning('Por favor, insira seu usuário e senha para começar.')
-
-# --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
-with st.expander("🔑 Criar Nova Conta"):
-    with st.form("register_form", clear_on_submit=True):
-        st.subheader("Formulário de Registro")
-        new_username = st.text_input("Novo Usuário*")
-        new_name = st.text_input("Seu Nome Completo*")
-        new_email = st.text_input("Seu Email*")
-        new_password = st.text_input("Nova Senha*", type='password')
-        new_password_confirm = st.text_input("Confirme a Senha*", type='password')
-        
-        submitted = st.form_submit_button("Registrar")
-        if submitted:
-            if not new_password or not new_password_confirm:
-                st.error("Os campos de senha não podem estar em branco.")
-            elif new_password != new_password_confirm:
-                st.error("As senhas não coincidem.")
-            elif not new_username or not new_name or not new_email:
-                st.error("Todos os campos marcados com * são obrigatórios.")
-            else:
-                try:
-                    hashed_password = stauth.Hasher().generate([new_password])[0]
-                    
-                    if add_user(new_username, hashed_password, new_name, new_email):
-                        st.success("Usuário registrado com sucesso! Por favor, faça login acima.")
-                    else:
-                        st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
-                except Exception as e:
-                    st.error(f"Ocorreu um erro inesperado durante o registro: {e}")
-
-# --- FIM SEÇÃO DE REGISTRO ---
