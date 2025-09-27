@@ -270,10 +270,16 @@ def adicionar_acessorio(id_trecho, lista_trechos):
 
 # --- INICIALIZAÇÃO E AUTENTICAÇÃO ---
 setup_database()
+
+# CARREGA AS CREDENCIAIS DO BANCO DE DADOS
+credentials = get_all_users_for_auth() 
+
+# Carrega a configuração do cookie do arquivo yaml
 with open('config.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
+
 authenticator = stauth.Authenticate(
-    config['credentials'],
+    credentials, # Usa as credenciais do banco de dados
     config['cookie']['name'],
     config['cookie']['key'],
     config['cookie']['expiry_days']
@@ -658,27 +664,28 @@ elif st.session_state["authentication_status"] == None:
 
     # --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
     with st.expander("🔑 Criar Nova Conta"):
-        new_username = st.text_input("Novo Usuário")
-        new_name = st.text_input("Seu Nome Completo")
-        new_password = st.text_input("Nova Senha", type='password')
-        new_password_confirm = st.text_input("Confirme a Senha", type='password')
-
-        if st.button("Registrar"):
-            if new_username and new_name and new_password and new_password_confirm:
-                if new_password == new_password_confirm:
-                    # Aqui usamos a função add_user do seu database.py
-                    if add_user(new_username, stauth.Hasher([new_password]).generate()[0], new_name):
-                        st.success("Usuário registrado com sucesso! Por favor, faça login.")
-                        # Opcional: Limpar campos após registro
-                        st.session_state.new_username = ""
-                        st.session_state.new_name = ""
-                        st.session_state.new_password = ""
-                        st.session_state.new_password_confirm = ""
-                        st.rerun() # Para forçar a atualização e talvez esconder o formulário de registro
+        # Usamos um formulário para agrupar os campos
+        with st.form("register_form", clear_on_submit=True):
+            new_username = st.text_input("Novo Usuário")
+            new_name = st.text_input("Seu Nome Completo")
+            new_email = st.text_input("Seu Email") # Adicionado campo de email
+            new_password = st.text_input("Nova Senha", type='password')
+            new_password_confirm = st.text_input("Confirme a Senha", type='password')
+            
+            submitted = st.form_submit_button("Registrar")
+            if submitted:
+                if new_username and new_name and new_password and new_password_confirm and new_email:
+                    if new_password == new_password_confirm:
+                        # Gera o hash da senha
+                        hashed_password = stauth.Hasher([new_password]).generate()[0]
+                        # Chama a função add_user importada do database.py
+                        if add_user(new_username, hashed_password, new_name, new_email):
+                            st.success("Usuário registrado com sucesso! Por favor, faça login.")
+                            # Não precisa limpar os campos por causa do clear_on_submit=True
+                        else:
+                            st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
                     else:
-                        st.error("Erro ao registrar usuário. O nome de usuário pode já existir.")
+                        st.error("As senhas não coincidem.")
                 else:
-                    st.error("As senhas não coincidem.")
-            else:
-                st.warning("Por favor, preencha todos os campos para registrar.")
+                    st.warning("Por favor, preencha todos os campos para registrar.")
     # --- FIM SEÇÃO DE REGISTRO ---
