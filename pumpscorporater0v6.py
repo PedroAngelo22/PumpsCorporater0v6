@@ -21,12 +21,6 @@ from database import (
 )
 from report_generator import generate_report
 
-# Adicione a linha abaixo
-st.info(f"Versão do Streamlit Authenticator instalada: {stauth.__version__}")
-
-# Deixe esta linha também para confirmar a atualização do app.py
-st.warning("TESTE DE ATUALIZAÇÃO - V2")
-
 # --- CONFIGURAÇÕES E CONSTANTES ---
 st.set_page_config(layout="wide", page_title="Análise de Redes Hidráulicas")
 plt.style.use('seaborn-v0_8-whitegrid')
