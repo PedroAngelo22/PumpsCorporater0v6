@@ -1,18 +1,12 @@
 # database.py (Versão 5.0 com conexão ao BD do Turso)
-
 import sqlite3
 import streamlit as st
 import httpx
 import json
 
 # --- Configurações do Banco de Dados ---
-# Usaremos uma abordagem para o Turso que emula o SQLite3, mas se conecta via HTTP.
-# As credenciais são carregadas do Streamlit Secrets.
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
-
-# Nome do banco de dados local (para referência/criação inicial, se necessário)
-DB_FILE = 'plataforma_hidraulica.db'
 
 # Função para executar comandos SQL no Turso
 def execute_turso_query(query, params=None, fetch_mode='none'):
@@ -22,12 +16,8 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
     }
     url = f"{TURSO_DATABASE_URL}/v1/execute"
 
-    # O Turso CLI envia um array de comandos, mesmo que seja um só.
-    # Nós estamos simulando isso aqui.
-    if params is None:
-        statements = [{"q": query}]
-    else:
-        statements = [{"q": query, "params": list(params)}] # Turso espera params como lista
+    # Turso espera 'params' como uma lista
+    statements = [{"q": query, "params": list(params)}] if params else [{"q": query}]
 
     try:
         with httpx.Client() as client:
@@ -43,10 +33,11 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             results_data = result['results'][0]
 
             if results_data.get('error'):
-                raise Exception(f"Erro no Turso: {results_data['error']}")
+                # Inclui o comando SQL na mensagem de erro para depuração
+                raise Exception(f"Erro no Turso para a query '{query}': {results_data['error']}")
 
             if fetch_mode == 'none':
-                return None
+                return None # Não espera retorno de dados para INSERT, UPDATE, DELETE
 
             columns = results_data.get('columns', [])
             rows = results_data.get('rows', [])
@@ -60,7 +51,7 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
                 # Retorna todas as linhas como uma lista de dicionários
                 return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
 
-            return None # Default
+            return None # Default, caso nenhum fetch_mode seja correspondido
 
     except httpx.HTTPStatusError as e:
         st.error(f"Erro de HTTP ao conectar ao Turso: {e.response.status_code} - {e.response.text}")
@@ -69,15 +60,13 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         st.error(f"Erro de rede ao conectar ao Turso: {e}")
         return None
     except json.JSONDecodeError:
-        st.error(f"Erro ao decodificar a resposta JSON do Turso: {response.text}")
+        st.error(f"Erro ao decodificar a resposta JSON do Turso. Resposta: {response.text}")
         return None
     except Exception as e:
         st.error(f"Erro inesperado ao executar query no Turso: {e}")
         return None
 
 def setup_database():
-    # As tabelas serão criadas se não existirem no Turso.
-    # Não precisamos de um objeto de conexão 'conn' local aqui.
     queries = [
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -135,15 +124,19 @@ def setup_database():
 
 # --- Funções de Usuário (User Management) ---
 def get_user(username):
-    result = execute_turso_query("SELECT * FROM users WHERE username = ?", (username,), fetch_mode='one')
+    # Retorna o usuário completo (username, password, name)
+    result = execute_turso_query("SELECT username, password, name FROM users WHERE username = ?", (username,), fetch_mode='one')
     return result
 
-def add_user(username, password, name):
+def add_user(username, password_hashed, name):
     try:
-        execute_turso_query("INSERT INTO users (username, password, name) VALUES (?, ?, ?)", (username, password, name))
+        execute_turso_query("INSERT INTO users (username, password, name) VALUES (?, ?, ?)", (username, password_hashed, name))
         return True
     except Exception as e:
-        st.warning(f"Erro ao adicionar usuário: {e}. Pode ser que o usuário já exista.")
+        # Erro de constraint UNIQUE significa que o usuário já existe
+        if "UNIQUE constraint failed" in str(e):
+            return False
+        st.error(f"Erro inesperado ao adicionar usuário: {e}")
         return False
 
 # --- Funções de Cenários (Scenario Management) ---
@@ -199,10 +192,9 @@ def add_user_fluid(username, fluid_name, density, viscosity, vapor_pressure):
         )
         return True
     except Exception as e:
-        # Em caso de UNIQUE constraint fail (fluido já existe)
         if "UNIQUE constraint failed" in str(e):
             return False
-        raise # Re-lança outros erros
+        raise
 
 def get_user_fluids(username):
     results = execute_turso_query("SELECT fluid_name, density, viscosity, vapor_pressure FROM user_fluids WHERE username = ?", (username,), fetch_mode='all')
