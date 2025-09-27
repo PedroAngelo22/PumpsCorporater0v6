@@ -1,4 +1,4 @@
-# database.py (Versão 6.1 - Correção final para a API v2 com 'requests')
+# database.py (Versão 6.2 - Tratamento de exceção refinado)
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,20 +8,16 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# Função para executar comandos SQL no Turso (reescrita final para a API v2)
+# Função para executar comandos SQL no Turso
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
     url = f"{TURSO_DATABASE_URL}/v2/pipeline"
-
-    # --- MUDANÇA FINAL: Estrutura completa do payload para a API v2 ---
-    # 1. O comando (stmt) é um objeto com 'sql' e 'args'.
+    
     stmt_obj = {"sql": query, "args": list(params) if params else []}
-    # 2. Cada comando é uma 'requisição' do tipo 'execute'.
     request_obj = {"type": "execute", "stmt": stmt_obj}
-    # 3. O corpo principal da mensagem usa a chave 'requests'.
     payload = {"requests": [request_obj]}
 
     try:
@@ -30,7 +26,6 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             response.raise_for_status()
             json_response = response.json()
 
-            # Lógica para processar a resposta da API v2 (permanece a mesma da v6.0)
             if not json_response or 'results' not in json_response or not json_response['results']:
                 return [] if fetch_mode == 'all' else None
 
@@ -38,7 +33,9 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
 
             if first_result.get('type') == 'error':
                 error_info = first_result.get('error', {})
-                raise Exception(f"Erro na API v2 do Turso: {error_info.get('message', 'Erro desconhecido')}")
+                # Apenas levantamos a exceção, sem tratá-la aqui.
+                # Isso permite que a função que chamou (ex: setup_database) a trate.
+                raise Exception(f"{error_info.get('message', 'Erro desconhecido')}")
 
             if fetch_mode == 'none':
                 return None
@@ -47,15 +44,11 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             columns = [col.get('name') for col in result_data.get('cols', []) if col.get('name') is not None]
             rows = result_data.get('rows', [])
 
-            if not columns:
-                return [] if fetch_mode == 'all' else None
-            
-            if not rows and fetch_mode != 'none':
-                 return [] if fetch_mode == 'all' else None
+            if not columns: return [] if fetch_mode == 'all' else None
+            if not rows and fetch_mode != 'none': return [] if fetch_mode == 'all' else None
 
             if fetch_mode == 'one':
-                if rows:
-                    return {columns[i]: row[i] for i in range(len(columns))}
+                if rows: return {columns[i]: row[i] for i in range(len(columns))}
                 return None
             elif fetch_mode == 'all':
                 return [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
@@ -63,22 +56,25 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             return None
             
     except httpx.HTTPStatusError as e:
+        # Erros de conexão ainda são mostrados
         st.error(f"Erro de HTTP ao conectar ao Turso: {e.response.status_code} - {e.response.text}")
         return None
     except httpx.RequestError as e:
         st.error(f"Erro de rede ao conectar ao Turso: {e}")
         return None
     except json.JSONDecodeError:
-        st.error(f"Erro ao decodificar a resposta JSON do Turso. Resposta: {response.text}")
+        st.error(f"Erro ao decodificar a resposta JSON do Turso: {response.text}")
         return None
-    except Exception as e:
-        st.error(f"Erro inesperado ao executar query no Turso: {e}")
-        return None
+    # REMOVEMOS o bloco 'except Exception as e' genérico daqui para permitir que
+    # a exceção específica do Turso seja tratada pela função chamadora.
 
 def setup_database():
     try:
+        # Esta chamada agora vai gerar uma exceção que podemos capturar aqui
         execute_turso_query("ALTER TABLE users ADD COLUMN email TEXT;")
     except Exception as e:
+        # Se a exceção contiver a mensagem de coluna duplicada, nós a ignoramos.
+        # Qualquer outro erro ainda será mostrado como um aviso.
         if "duplicate column name" not in str(e):
             st.warning(f"Não foi possível adicionar a coluna 'email': {e}")
             
@@ -92,9 +88,8 @@ def setup_database():
     for query in queries:
         execute_turso_query(query)
 
-
 # --- O resto do arquivo permanece exatamente o mesmo ---
-# --- Funções de Usuário (User Management) ---
+
 def get_user(username):
     result = execute_turso_query("SELECT username, password, name, email FROM users WHERE username = ?", (username,), fetch_mode='one')
     return result
@@ -110,7 +105,6 @@ def add_user(username, password_hashed, name, email):
         return False
         
 def get_all_users_for_auth():
-    """Busca todos os usuários e formata para o streamlit-authenticator."""
     users = execute_turso_query("SELECT username, name, password, email FROM users", fetch_mode='all')
     credentials = {"usernames": {}}
     if users:
@@ -122,7 +116,6 @@ def get_all_users_for_auth():
             }
     return credentials
 
-# --- Funções de Cenários (Scenario Management) ---
 def save_scenario(username, project_name, scenario_name, scenario_data):
     execute_turso_query("INSERT OR IGNORE INTO projects (username, project_name) VALUES (?, ?)", (username, project_name))
     data_json = json.dumps(scenario_data)
@@ -159,7 +152,6 @@ def delete_scenario(username, project_name, scenario_name):
         (username, project_name, scenario_name)
     )
 
-# --- Funções de Fluidos Customizados ---
 def add_user_fluid(username, fluid_name, density, viscosity, vapor_pressure):
     try:
         execute_turso_query(
@@ -181,7 +173,6 @@ def get_user_fluids(username):
 def delete_user_fluid(username, fluid_name):
     execute_turso_query("DELETE FROM user_fluids WHERE username = ? AND fluid_name = ?", (username, fluid_name))
 
-# --- Funções de Materiais Customizados ---
 def add_user_material(username, material_name, roughness):
     try:
         execute_turso_query(
