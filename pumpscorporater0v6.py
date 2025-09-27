@@ -21,6 +21,8 @@ from database import (
 )
 from report_generator import generate_report
 
+st.warning("TESTE DE ATUALIZAÇÃO - v2") # <--- ADICIONE ESTA LINHA
+
 # --- CONFIGURAÇÕES E CONSTANTES ---
 st.set_page_config(layout="wide", page_title="Análise de Redes Hidráulicas")
 plt.style.use('seaborn-v0_8-whitegrid')
