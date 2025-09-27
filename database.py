@@ -1,4 +1,4 @@
-# database.py (Versão 5.0 com conexão ao BD do Turso)
+# database.py (Versão 5.1 com melhorias de autenticação)
 import sqlite3
 import streamlit as st
 import httpx
@@ -15,44 +15,28 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         "Content-Type": "application/json"
     }
     url = f"{TURSO_DATABASE_URL}/v1/execute"
-
-    # Turso espera 'params' como uma lista
     statements = [{"q": query, "params": list(params)}] if params else [{"q": query}]
-
     try:
         with httpx.Client() as client:
             response = client.post(url, headers=headers, json={"statements": statements})
-            response.raise_for_status() # Lança uma exceção para erros HTTP
-
+            response.raise_for_status()
             result = response.json()
-
             if not result or not result.get('results'):
-                return [] if fetch_mode == 'all' else None # Nenhum resultado ou dados
-
-            # A resposta do Turso é aninhada. Extraímos os dados.
+                return [] if fetch_mode == 'all' else None
             results_data = result['results'][0]
-
             if results_data.get('error'):
-                # Inclui o comando SQL na mensagem de erro para depuração
                 raise Exception(f"Erro no Turso para a query '{query}': {results_data['error']}")
-
             if fetch_mode == 'none':
-                return None # Não espera retorno de dados para INSERT, UPDATE, DELETE
-
+                return None
             columns = results_data.get('columns', [])
             rows = results_data.get('rows', [])
-
             if fetch_mode == 'one':
                 if rows:
-                    # Retorna a primeira linha como um dicionário
                     return {col: rows[0][i] for i, col in enumerate(columns)}
                 return None
             elif fetch_mode == 'all':
-                # Retorna todas as linhas como uma lista de dicionários
                 return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
-
-            return None # Default, caso nenhum fetch_mode seja correspondido
-
+            return None
     except httpx.HTTPStatusError as e:
         st.error(f"Erro de HTTP ao conectar ao Turso: {e.response.status_code} - {e.response.text}")
         return None
@@ -67,12 +51,22 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         return None
 
 def setup_database():
+    # Adicionamos a coluna 'email' na tabela de usuários.
+    # Usamos um bloco TRY/EXCEPT para evitar erros caso a coluna já exista.
+    try:
+        execute_turso_query("ALTER TABLE users ADD COLUMN email TEXT;")
+    except Exception as e:
+        # É esperado um erro se a coluna já existir, então podemos ignorá-lo.
+        if "duplicate column name" not in str(e):
+            st.warning(f"Não foi possível adicionar a coluna 'email': {e}")
+            
     queries = [
         """
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             password TEXT NOT NULL,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            email TEXT
         );
         """,
         """
@@ -122,29 +116,38 @@ def setup_database():
     for query in queries:
         execute_turso_query(query)
 
+
 # --- Funções de Usuário (User Management) ---
 def get_user(username):
-    # Retorna o usuário completo (username, password, name)
-    result = execute_turso_query("SELECT username, password, name FROM users WHERE username = ?", (username,), fetch_mode='one')
+    result = execute_turso_query("SELECT username, password, name, email FROM users WHERE username = ?", (username,), fetch_mode='one')
     return result
 
-def add_user(username, password_hashed, name):
+def add_user(username, password_hashed, name, email):
     try:
-        execute_turso_query("INSERT INTO users (username, password, name) VALUES (?, ?, ?)", (username, password_hashed, name))
+        execute_turso_query("INSERT INTO users (username, password, name, email) VALUES (?, ?, ?, ?)", (username, password_hashed, name, email))
         return True
     except Exception as e:
-        # Erro de constraint UNIQUE significa que o usuário já existe
         if "UNIQUE constraint failed" in str(e):
             return False
         st.error(f"Erro inesperado ao adicionar usuário: {e}")
         return False
+        
+def get_all_users_for_auth():
+    """Busca todos os usuários e formata para o streamlit-authenticator."""
+    users = execute_turso_query("SELECT username, name, password, email FROM users", fetch_mode='all')
+    credentials = {"usernames": {}}
+    if users:
+        for user in users:
+            credentials["usernames"][user['username']] = {
+                "name": user['name'],
+                "password": user['password'],
+                "email": user.get('email', '') # Garante que não dê erro se o email for nulo
+            }
+    return credentials
 
 # --- Funções de Cenários (Scenario Management) ---
 def save_scenario(username, project_name, scenario_name, scenario_data):
-    # Primeiro, garante que o projeto exista
     execute_turso_query("INSERT OR IGNORE INTO projects (username, project_name) VALUES (?, ?)", (username, project_name))
-
-    # Agora, salva ou atualiza o cenário
     data_json = json.dumps(scenario_data)
     execute_turso_query(
         "INSERT OR REPLACE INTO scenarios (username, project_name, scenario_name, scenario_data) VALUES (?, ?, ?, ?)",
@@ -178,10 +181,6 @@ def delete_scenario(username, project_name, scenario_name):
         "DELETE FROM scenarios WHERE username = ? AND project_name = ? AND scenario_name = ?",
         (username, project_name, scenario_name)
     )
-    # Opcional: Limpar projetos vazios
-    # count_scenarios = execute_turso_query("SELECT COUNT(*) as count FROM scenarios WHERE username = ? AND project_name = ?", (username, project_name), fetch_mode='one')
-    # if count_scenarios and count_scenarios['count'] == 0:
-    #     execute_turso_query("DELETE FROM projects WHERE username = ? AND project_name = ?", (username, project_name))
 
 # --- Funções de Fluidos Customizados ---
 def add_user_fluid(username, fluid_name, density, viscosity, vapor_pressure):
