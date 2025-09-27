@@ -1,4 +1,4 @@
-# database.py (Versão 7.1 - Correção final do NameError no login)
+# database.py (Versão 7.2 - Desempacotamento da resposta da API do Turso)
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,9 +8,9 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# --- FUNÇÃO AUXILIAR ---
+# --- FUNÇÕES AUXILIARES ---
 def _format_turso_args(params):
-    """Formata os parâmetros para o formato exigido pela API v2 do Turso."""
+    """Formata os parâmetros de ida para o formato exigido pela API v2."""
     if not params:
         return []
     
@@ -28,7 +28,29 @@ def _format_turso_args(params):
             formatted_args.append({"type": "text", "value": str(p)})
     return formatted_args
 
-# --- Função de query atualizada ---
+def _unwrap_turso_response_values(rows, columns):
+    """'Desempacota' os objetos de valor retornados pela API v2."""
+    if not rows:
+        return []
+    
+    unwrapped_rows = []
+    for row in rows:
+        unwrapped_row = []
+        for val in row:
+            if isinstance(val, dict) and 'value' in val:
+                unwrapped_row.append(val['value'])
+            else:
+                unwrapped_row.append(val)
+        unwrapped_rows.append(unwrapped_row)
+    
+    # Converte as linhas desempacotadas em dicionários
+    dict_rows = []
+    for row in unwrapped_rows:
+        dict_rows.append({columns[i]: row[i] for i in range(len(columns))})
+        
+    return dict_rows
+
+# --- Função de query com a lógica final ---
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
@@ -63,15 +85,16 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             columns = [col.get('name') for col in result_data.get('cols', []) if col.get('name') is not None]
             rows = result_data.get('rows', [])
 
-            if not columns: return [] if fetch_mode == 'all' else None
-            if not rows and fetch_mode != 'none': return [] if fetch_mode == 'all' else None
+            if not columns or not rows:
+                return [] if fetch_mode == 'all' else None
+
+            # Usamos a nova função para processar os resultados
+            processed_rows = _unwrap_turso_response_values(rows, columns)
 
             if fetch_mode == 'one':
-                # --- LINHA CORRIGIDA ---
-                if rows: return {columns[i]: rows[0][i] for i in range(len(columns))}
-                return None
+                return processed_rows[0] if processed_rows else None
             elif fetch_mode == 'all':
-                return [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
+                return processed_rows
             return None
     except Exception as e:
         raise e
@@ -109,18 +132,6 @@ def add_user(username, password_hashed, name, email):
         st.error(f"Erro inesperado ao adicionar usuário: {e}")
         return False
         
-def get_all_users_for_auth():
-    users = execute_turso_query("SELECT username, name, password, email FROM users", fetch_mode='all')
-    credentials = {"usernames": {}}
-    if users:
-        for user in users:
-            credentials["usernames"][user['username']] = {
-                "name": user['name'],
-                "password": user['password'],
-                "email": user.get('email', '')
-            }
-    return credentials
-
 def save_scenario(username, project_name, scenario_name, scenario_data):
     execute_turso_query("INSERT OR IGNORE INTO projects (username, project_name) VALUES (?, ?)", (username, project_name))
     data_json = json.dumps(scenario_data)
@@ -171,9 +182,8 @@ def add_user_fluid(username, fluid_name, density, viscosity, vapor_pressure):
 
 def get_user_fluids(username):
     results = execute_turso_query("SELECT fluid_name, density, viscosity, vapor_pressure FROM user_fluids WHERE username = ?", (username,), fetch_mode='all')
-    if results:
-        return {row['fluid_name']: {'rho': row['density'], 'nu': row['viscosity'], 'pv_kpa': row['vapor_pressure']} for row in results}
-    return {}
+    if not results: return {}
+    return {row['fluid_name']: {'rho': row['density'], 'nu': row['viscosity'], 'pv_kpa': row['vapor_pressure']} for row in results}
 
 def delete_user_fluid(username, fluid_name):
     execute_turso_query("DELETE FROM user_fluids WHERE username = ? AND fluid_name = ?", (username, fluid_name))
@@ -192,9 +202,8 @@ def add_user_material(username, material_name, roughness):
 
 def get_user_materials(username):
     results = execute_turso_query("SELECT material_name, roughness FROM user_materials WHERE username = ?", (username,), fetch_mode='all')
-    if results:
-        return {row['material_name']: row['roughness'] for row in results}
-    return {}
+    if not results: return {}
+    return {row['material_name']: row['roughness'] for row in results}
 
 def delete_user_material(username, material_name):
     execute_turso_query("DELETE FROM user_materials WHERE username = ? AND material_name = ?", (username, material_name))
