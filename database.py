@@ -1,4 +1,4 @@
-# database.py (Versão 6.0 - Migração para a API v2 do Turso)
+# database.py (Versão 6.1 - Correção final para a API v2 com 'requests')
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,22 +8,21 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# Função para executar comandos SQL no Turso (reescrita para a API v2)
+# Função para executar comandos SQL no Turso (reescrita final para a API v2)
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
-    # 1. MUDANÇA: Usando o endpoint /v2/pipeline
     url = f"{TURSO_DATABASE_URL}/v2/pipeline"
 
-    # 2. MUDANÇA: Novo formato de payload para a API v2
-    if params:
-        # Formato v2 para queries com parâmetros
-        payload = {"statements": [{"sql": query, "args": list(params)}]}
-    else:
-        # Formato v2 para queries simples pode ser apenas a string do comando
-        payload = {"statements": [query]}
+    # --- MUDANÇA FINAL: Estrutura completa do payload para a API v2 ---
+    # 1. O comando (stmt) é um objeto com 'sql' e 'args'.
+    stmt_obj = {"sql": query, "args": list(params) if params else []}
+    # 2. Cada comando é uma 'requisição' do tipo 'execute'.
+    request_obj = {"type": "execute", "stmt": stmt_obj}
+    # 3. O corpo principal da mensagem usa a chave 'requests'.
+    payload = {"requests": [request_obj]}
 
     try:
         with httpx.Client() as client:
@@ -31,7 +30,7 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             response.raise_for_status()
             json_response = response.json()
 
-            # 3. MUDANÇA: Nova lógica para processar a resposta da API v2
+            # Lógica para processar a resposta da API v2 (permanece a mesma da v6.0)
             if not json_response or 'results' not in json_response or not json_response['results']:
                 return [] if fetch_mode == 'all' else None
 
@@ -51,7 +50,6 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
             if not columns:
                 return [] if fetch_mode == 'all' else None
             
-            # Turso v2 pode retornar rows vazias para queries que não retornam dados (como INSERT)
             if not rows and fetch_mode != 'none':
                  return [] if fetch_mode == 'all' else None
 
@@ -85,63 +83,17 @@ def setup_database():
             st.warning(f"Não foi possível adicionar a coluna 'email': {e}")
             
     queries = [
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            name TEXT NOT NULL,
-            email TEXT
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            project_name TEXT NOT NULL,
-            FOREIGN KEY (username) REFERENCES users (username),
-            UNIQUE (username, project_name)
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS scenarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            project_name TEXT NOT NULL,
-            scenario_name TEXT NOT NULL,
-            scenario_data TEXT NOT NULL,
-            FOREIGN KEY (username) REFERENCES users (username),
-            FOREIGN KEY (project_name) REFERENCES projects (project_name),
-            UNIQUE (username, project_name, scenario_name)
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS user_fluids (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            fluid_name TEXT NOT NULL,
-            density REAL NOT NULL,
-            viscosity REAL NOT NULL,
-            vapor_pressure REAL NOT NULL,
-            FOREIGN KEY (username) REFERENCES users (username),
-            UNIQUE (username, fluid_name)
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS user_materials (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            material_name TEXT NOT NULL,
-            roughness REAL NOT NULL,
-            FOREIGN KEY (username) REFERENCES users (username),
-            UNIQUE (username, material_name)
-        );
-        """
+        "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT NOT NULL, name TEXT NOT NULL, email TEXT);",
+        "CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY, username TEXT NOT NULL, project_name TEXT NOT NULL, FOREIGN KEY (username) REFERENCES users (username), UNIQUE (username, project_name));",
+        "CREATE TABLE IF NOT EXISTS scenarios (id INTEGER PRIMARY KEY, username TEXT NOT NULL, project_name TEXT NOT NULL, scenario_name TEXT NOT NULL, scenario_data TEXT NOT NULL, FOREIGN KEY (username) REFERENCES users (username), UNIQUE (username, project_name, scenario_name));",
+        "CREATE TABLE IF NOT EXISTS user_fluids (id INTEGER PRIMARY KEY, username TEXT NOT NULL, fluid_name TEXT NOT NULL, density REAL NOT NULL, viscosity REAL NOT NULL, vapor_pressure REAL NOT NULL, FOREIGN KEY (username) REFERENCES users (username), UNIQUE (username, fluid_name));",
+        "CREATE TABLE IF NOT EXISTS user_materials (id INTEGER PRIMARY KEY, username TEXT NOT NULL, material_name TEXT NOT NULL, roughness REAL NOT NULL, FOREIGN KEY (username) REFERENCES users (username), UNIQUE (username, material_name));"
     ]
     for query in queries:
         execute_turso_query(query)
 
-# --- O resto do arquivo permanece exatamente o mesmo ---
 
+# --- O resto do arquivo permanece exatamente o mesmo ---
 # --- Funções de Usuário (User Management) ---
 def get_user(username):
     result = execute_turso_query("SELECT username, password, name, email FROM users WHERE username = ?", (username,), fetch_mode='one')
