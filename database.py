@@ -1,4 +1,4 @@
-# database.py (Versão 5.4 - Correção final na estrutura do JSON)
+# database.py (Versão 6.0 - Migração para a API v2 do Turso)
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,39 +8,62 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# Função para executar comandos SQL no Turso
+# Função para executar comandos SQL no Turso (reescrita para a API v2)
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
-    url = f"{TURSO_DATABASE_URL}/v1/execute"
-    
-    # --- LINHA CORRIGIDA FINAL ---
-    # Garantimos que a chave 'params' sempre exista no objeto, mesmo que como uma lista vazia.
-    statements = [{"stmt": query, "params": list(params) if params else []}]
+    # 1. MUDANÇA: Usando o endpoint /v2/pipeline
+    url = f"{TURSO_DATABASE_URL}/v2/pipeline"
+
+    # 2. MUDANÇA: Novo formato de payload para a API v2
+    if params:
+        # Formato v2 para queries com parâmetros
+        payload = {"statements": [{"sql": query, "args": list(params)}]}
+    else:
+        # Formato v2 para queries simples pode ser apenas a string do comando
+        payload = {"statements": [query]}
 
     try:
         with httpx.Client() as client:
-            response = client.post(url, headers=headers, json={"statements": statements})
+            response = client.post(url, headers=headers, json=payload)
             response.raise_for_status()
-            result = response.json()
-            if not result or not result.get('results'):
+            json_response = response.json()
+
+            # 3. MUDANÇA: Nova lógica para processar a resposta da API v2
+            if not json_response or 'results' not in json_response or not json_response['results']:
                 return [] if fetch_mode == 'all' else None
-            results_data = result['results'][0]
-            if results_data.get('error'):
-                raise Exception(f"Erro no Turso para a query '{query}': {results_data['error']}")
+
+            first_result = json_response['results'][0]
+
+            if first_result.get('type') == 'error':
+                error_info = first_result.get('error', {})
+                raise Exception(f"Erro na API v2 do Turso: {error_info.get('message', 'Erro desconhecido')}")
+
             if fetch_mode == 'none':
                 return None
-            columns = results_data.get('columns', [])
-            rows = results_data.get('rows', [])
+            
+            result_data = first_result.get('response', {}).get('result', {})
+            columns = [col.get('name') for col in result_data.get('cols', []) if col.get('name') is not None]
+            rows = result_data.get('rows', [])
+
+            if not columns:
+                return [] if fetch_mode == 'all' else None
+            
+            # Turso v2 pode retornar rows vazias para queries que não retornam dados (como INSERT)
+            if not rows and fetch_mode != 'none':
+                 return [] if fetch_mode == 'all' else None
+
             if fetch_mode == 'one':
                 if rows:
-                    return {col: rows[0][i] for i, col in enumerate(columns)}
+                    return {columns[i]: row[i] for i in range(len(columns))}
                 return None
             elif fetch_mode == 'all':
-                return [{col: row[i] for i, col in enumerate(columns)} for row in rows]
+                return [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
+
             return None
+            
     except httpx.HTTPStatusError as e:
         st.error(f"Erro de HTTP ao conectar ao Turso: {e.response.status_code} - {e.response.text}")
         return None
@@ -117,6 +140,7 @@ def setup_database():
     for query in queries:
         execute_turso_query(query)
 
+# --- O resto do arquivo permanece exatamente o mesmo ---
 
 # --- Funções de Usuário (User Management) ---
 def get_user(username):
