@@ -654,11 +654,12 @@ if st.session_state.get("authentication_status"):
     except Exception as e:
         st.error(f"Ocorreu um erro inesperado durante a execução. Detalhe: {str(e)}")
 
-# --- INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS (VERSÃO CORRIGIDA) ---
+# app.py (substitua a seção final por este código)
+
+# --- INÍCIO SEÇÃO DE REGISTRO/LOGIN DE USUÁRIOS (VERSÃO CORRIGIDA FINAL) ---
 
 if st.session_state["authentication_status"] == False:
     st.error('Usuário/senha incorreto')
-    # Adicionando link para registro caso o login falhe
     st.info('Ainda não tem uma conta? Expanda a seção "Criar Nova Conta" abaixo para se registrar.')
 
 elif st.session_state["authentication_status"] == None:
@@ -666,7 +667,6 @@ elif st.session_state["authentication_status"] == None:
     st.warning('Por favor, insira seu usuário e senha para começar.')
 
 # --- SEÇÃO DE REGISTRO DE USUÁRIOS ---
-# Movida para fora do bloco 'elif' para estar sempre visível antes do login
 with st.expander("🔑 Criar Nova Conta"):
     with st.form("register_form", clear_on_submit=True):
         st.subheader("Formulário de Registro")
@@ -678,18 +678,17 @@ with st.expander("🔑 Criar Nova Conta"):
         
         submitted = st.form_submit_button("Registrar")
         if submitted:
-            # 1. Validação de senhas primeiro
             if not new_password or not new_password_confirm:
                 st.error("Os campos de senha não podem estar em branco.")
             elif new_password != new_password_confirm:
                 st.error("As senhas não coincidem.")
-            # 2. Validação de outros campos
             elif not new_username or not new_name or not new_email:
                 st.error("Todos os campos marcados com * são obrigatórios.")
-            # 3. Se tudo estiver ok, prossiga com a criptografia e registro
             else:
                 try:
-                    hashed_password = stauth.Hasher([new_password]).generate()[0]
+                    # --- LINHA CORRIGIDA ---
+                    hashed_password = stauth.Hasher().generate([new_password])[0]
+                    
                     if add_user(new_username, hashed_password, new_name, new_email):
                         st.success("Usuário registrado com sucesso! Por favor, faça login acima.")
                     else:
