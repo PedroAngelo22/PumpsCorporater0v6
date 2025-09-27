@@ -1,4 +1,4 @@
-# database.py (Versão 5.2 com correção no formato da requisição para Turso)
+# database.py (Versão 5.3 - com teste de depuração via st.toast)
 import sqlite3
 import streamlit as st
 import httpx
@@ -14,12 +14,12 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
-    # A URL para a API v1 agora espera o corpo no formato v2 (com 'stmt')
     url = f"{TURSO_DATABASE_URL}/v1/execute"
-
-    # --- LINHA CORRIGIDA ---
-    # Trocamos a chave 'q' por 'stmt' para alinhar com o que a API espera.
     statements = [{"stmt": query, "params": list(params)}] if params else [{"stmt": query}]
+
+    # --- LINHA DE DEPURAÇÃO ADICIONADA ---
+    # Esta linha vai nos mostrar a versão do código e o comando exato sendo enviado.
+    st.toast(f"DB v3 - Enviando: {json.dumps(statements)}")
 
     try:
         with httpx.Client() as client:
