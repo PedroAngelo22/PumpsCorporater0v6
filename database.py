@@ -1,4 +1,4 @@
-# database.py (Versão 5.1 com melhorias de autenticação)
+# database.py (Versão 5.2 com correção no formato da requisição para Turso)
 import sqlite3
 import streamlit as st
 import httpx
@@ -14,8 +14,13 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
+    # A URL para a API v1 agora espera o corpo no formato v2 (com 'stmt')
     url = f"{TURSO_DATABASE_URL}/v1/execute"
-    statements = [{"q": query, "params": list(params)}] if params else [{"q": query}]
+
+    # --- LINHA CORRIGIDA ---
+    # Trocamos a chave 'q' por 'stmt' para alinhar com o que a API espera.
+    statements = [{"stmt": query, "params": list(params)}] if params else [{"stmt": query}]
+
     try:
         with httpx.Client() as client:
             response = client.post(url, headers=headers, json={"statements": statements})
@@ -51,12 +56,9 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
         return None
 
 def setup_database():
-    # Adicionamos a coluna 'email' na tabela de usuários.
-    # Usamos um bloco TRY/EXCEPT para evitar erros caso a coluna já exista.
     try:
         execute_turso_query("ALTER TABLE users ADD COLUMN email TEXT;")
     except Exception as e:
-        # É esperado um erro se a coluna já existir, então podemos ignorá-lo.
         if "duplicate column name" not in str(e):
             st.warning(f"Não foi possível adicionar a coluna 'email': {e}")
             
@@ -141,7 +143,7 @@ def get_all_users_for_auth():
             credentials["usernames"][user['username']] = {
                 "name": user['name'],
                 "password": user['password'],
-                "email": user.get('email', '') # Garante que não dê erro se o email for nulo
+                "email": user.get('email', '')
             }
     return credentials
 
