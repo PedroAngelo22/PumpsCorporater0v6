@@ -1,4 +1,4 @@
-# database.py (Versão 6.2 - Tratamento de exceção refinado)
+# database.py (Versão 7.0 - Correção definitiva da formatação de parâmetros)
 import sqlite3
 import streamlit as st
 import httpx
@@ -8,7 +8,27 @@ import json
 TURSO_DATABASE_URL = st.secrets["turso"]["DATABASE_URL"]
 TURSO_AUTH_TOKEN = st.secrets["turso"]["DATABASE_TOKEN"]
 
-# Função para executar comandos SQL no Turso
+# --- NOVA FUNÇÃO AUXILIAR ---
+def _format_turso_args(params):
+    """Formata os parâmetros para o formato exigido pela API v2 do Turso."""
+    if not params:
+        return []
+    
+    formatted_args = []
+    for p in params:
+        if isinstance(p, str):
+            formatted_args.append({"type": "text", "value": p})
+        elif isinstance(p, int):
+            formatted_args.append({"type": "integer", "value": str(p)})
+        elif isinstance(p, float):
+            formatted_args.append({"type": "float", "value": p})
+        elif p is None:
+            formatted_args.append({"type": "null"})
+        else: # Um fallback seguro para outros tipos de dados
+            formatted_args.append({"type": "text", "value": str(p)})
+    return formatted_args
+
+# --- Função de query atualizada para usar a formatação ---
 def execute_turso_query(query, params=None, fetch_mode='none'):
     headers = {
         "Authorization": f"Bearer {TURSO_AUTH_TOKEN}",
@@ -16,7 +36,9 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
     }
     url = f"{TURSO_DATABASE_URL}/v2/pipeline"
     
-    stmt_obj = {"sql": query, "args": list(params) if params else []}
+    # Usamos a nova função para formatar os parâmetros
+    formatted_args = _format_turso_args(params)
+    stmt_obj = {"sql": query, "args": formatted_args}
     request_obj = {"type": "execute", "stmt": stmt_obj}
     payload = {"requests": [request_obj]}
 
@@ -33,8 +55,6 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
 
             if first_result.get('type') == 'error':
                 error_info = first_result.get('error', {})
-                # Apenas levantamos a exceção, sem tratá-la aqui.
-                # Isso permite que a função que chamou (ex: setup_database) a trate.
                 raise Exception(f"{error_info.get('message', 'Erro desconhecido')}")
 
             if fetch_mode == 'none':
@@ -52,29 +72,15 @@ def execute_turso_query(query, params=None, fetch_mode='none'):
                 return None
             elif fetch_mode == 'all':
                 return [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
-
             return None
-            
-    except httpx.HTTPStatusError as e:
-        # Erros de conexão ainda são mostrados
-        st.error(f"Erro de HTTP ao conectar ao Turso: {e.response.status_code} - {e.response.text}")
-        return None
-    except httpx.RequestError as e:
-        st.error(f"Erro de rede ao conectar ao Turso: {e}")
-        return None
-    except json.JSONDecodeError:
-        st.error(f"Erro ao decodificar a resposta JSON do Turso: {response.text}")
-        return None
-    # REMOVEMOS o bloco 'except Exception as e' genérico daqui para permitir que
-    # a exceção específica do Turso seja tratada pela função chamadora.
+    except Exception as e:
+        raise e
 
 def setup_database():
+    # ... (o resto do arquivo não precisa de mudanças, pois já usa as funções acima)
     try:
-        # Esta chamada agora vai gerar uma exceção que podemos capturar aqui
         execute_turso_query("ALTER TABLE users ADD COLUMN email TEXT;")
     except Exception as e:
-        # Se a exceção contiver a mensagem de coluna duplicada, nós a ignoramos.
-        # Qualquer outro erro ainda será mostrado como um aviso.
         if "duplicate column name" not in str(e):
             st.warning(f"Não foi possível adicionar a coluna 'email': {e}")
             
@@ -87,8 +93,6 @@ def setup_database():
     ]
     for query in queries:
         execute_turso_query(query)
-
-# --- O resto do arquivo permanece exatamente o mesmo ---
 
 def get_user(username):
     result = execute_turso_query("SELECT username, password, name, email FROM users WHERE username = ?", (username,), fetch_mode='one')
