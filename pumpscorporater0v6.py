@@ -1,4 +1,4 @@
-# app.py (Versão 7.0 - Com sistema de autenticação customizado)
+# app.py (Versão 7.2 - Lógica de login robusta)
 
 # --- Importações Essenciais ---
 import streamlit as st
@@ -12,14 +12,13 @@ import matplotlib.pyplot as plt
 import io
 import yaml
 from yaml.loader import SafeLoader
-import bcrypt # Importamos bcrypt diretamente
+import bcrypt
 
-# Importando as funções do banco de dados
 from database import (
     setup_database, save_scenario, load_scenario, get_user_projects,
     get_scenarios_for_project, delete_scenario, add_user_fluid, get_user_fluids,
     delete_user_fluid, add_user_material, get_user_materials, delete_user_material,
-    add_user, get_user # Funções que vamos usar para o login
+    add_user, get_user
 )
 from report_generator import generate_report
 
@@ -53,7 +52,6 @@ def calcular_perda_serie(lista_trechos, vazao_m3h, fluido_selecionado, materiais
         perda_total += perdas["principal"] + perdas["localizada"]
         perda_total += trecho.get('perda_equipamento_m', 0.0)
     return perda_total
-
 def calcular_perdas_trecho(trecho, vazao_m3h, fluido_selecionado, materiais_combinados, fluidos_combinados):
     if vazao_m3h < 0: vazao_m3h = 0
     rugosidade_mm = materiais_combinados[trecho["material"]]
@@ -75,7 +73,6 @@ def calcular_perdas_trecho(trecho, vazao_m3h, fluido_selecionado, materiais_comb
     k_total_trecho = sum(ac["k"] * ac["quantidade"] for ac in trecho["acessorios"])
     perda_localizada = k_total_trecho * (velocidade**2 / (2 * 9.81))
     return {"principal": perda_principal, "localizada": perda_localizada, "velocidade": velocidade}
-
 def calcular_perdas_paralelo(ramais, vazao_total_m3h, fluido_selecionado, materiais_combinados, fluidos_combinados):
     num_ramais = len(ramais)
     if num_ramais < 2: return 0, {}
@@ -94,7 +91,6 @@ def calcular_perdas_paralelo(ramais, vazao_total_m3h, fluido_selecionado, materi
     perda_final_paralelo = calcular_perda_serie(lista_ramais[0], vazoes_finais[0], fluido_selecionado, materiais_combinados, fluidos_combinados)
     distribuicao_vazao = {nome_ramal: vazao for nome_ramal, vazao in zip(ramais.keys(), vazoes_finais)}
     return perda_final_paralelo, distribuicao_vazao
-
 def calcular_analise_energetica(vazao_m3h, h_man, eficiencia_bomba_percent, eficiencia_motor_percent, horas_dia, custo_kwh, fluido_selecionado, fluidos_combinados):
     rho = fluidos_combinados[fluido_selecionado]["rho"]
     ef_bomba = eficiencia_bomba_percent / 100
@@ -102,7 +98,6 @@ def calcular_analise_energetica(vazao_m3h, h_man, eficiencia_bomba_percent, efic
     potencia_eletrica_kW = (vazao_m3h / 3600 * rho * 9.81 * h_man) / (ef_bomba * ef_motor) / 1000 if ef_bomba * ef_motor > 0 else 0
     custo_anual = potencia_eletrica_kW * horas_dia * 30 * 12 * custo_kwh
     return {"potencia_eletrica_kW": potencia_eletrica_kW, "custo_anual": custo_anual}
-
 def criar_funcao_curva(df_curva, col_x, col_y, grau=2):
     df_curva[col_x] = pd.to_numeric(df_curva[col_x], errors='coerce')
     df_curva[col_y] = pd.to_numeric(df_curva[col_y], errors='coerce')
@@ -110,7 +105,6 @@ def criar_funcao_curva(df_curva, col_x, col_y, grau=2):
     if len(df_curva) < grau + 1: return None
     coeficientes = np.polyfit(df_curva[col_x], df_curva[col_y], grau)
     return np.poly1d(coeficientes)
-
 def converter_pressao_para_mca(pressao, unidade_origem, rho_fluido):
     if rho_fluido <= 0: return 0.0
     if unidade_origem == 'kgf/cm2':
@@ -121,12 +115,10 @@ def converter_pressao_para_mca(pressao, unidade_origem, rho_fluido):
         return 0.0
     altura_m = pressao_pa / (rho_fluido * 9.81)
     return altura_m
-
 def calcular_pressao_atm_mca(altitude_m, rho_fluido):
     if rho_fluido <= 0: return 0.0
     pressao_pa = 101325 * (1 - 2.25577e-5 * altitude_m)**5.25588
     return pressao_pa / (rho_fluido * 9.81)
-
 def encontrar_ponto_operacao(sistema_succao, sistema_recalque, h_estatica_total, fluido, func_curva_bomba, materiais_combinados, fluidos_combinados):
     def curva_sistema(vazao_m3h):
         if vazao_m3h < 0: return h_estatica_total
@@ -148,7 +140,6 @@ def encontrar_ponto_operacao(sistema_succao, sistema_recalque, h_estatica_total,
         return vazao_op, altura_op, curva_sistema
     else:
         return None, None, curva_sistema
-
 def gerar_diagrama_rede(sistema_succao, sistema_recalque, vazao_total, distribuicao_vazao, fluido, materiais_combinados, fluidos_combinados):
     dot = graphviz.Digraph(comment='Rede de Tubulação'); dot.attr('graph', rankdir='LR', splines='ortho'); dot.attr('node', shape='point')
     dot.node('start', 'Reservatório\nSucção', shape='cylinder', style='filled', fillcolor='lightblue')
@@ -197,7 +188,6 @@ def gerar_diagrama_rede(sistema_succao, sistema_recalque, vazao_total, distribui
         ultimo_no = proximo_no
     dot.node('end', 'Fim', shape='circle', style='filled', fillcolor='lightgray'); dot.edge(ultimo_no, 'end')
     return dot
-
 def gerar_grafico_sensibilidade_diametro(sistema_succao_base, sistema_recalque_base, fator_escala_range, **params_fixos):
     custos, fatores = [], np.arange(fator_escala_range[0], fator_escala_range[1] + 5, 5)
     materiais_combinados = params_fixos['materiais_combinados']
@@ -224,7 +214,6 @@ def gerar_grafico_sensibilidade_diametro(sistema_succao_base, sistema_recalque_b
         resultado_energia = calcular_analise_energetica(vazao_ref, h_man, fluidos_combinados=fluidos_combinados, **params_fixos['equipamentos'])
         custos.append(resultado_energia['custo_anual'])
     return pd.DataFrame({'Fator de Escala nos Diâmetros (%)': fatores, 'Custo Anual de Energia (R$)': custos})
-
 def render_trecho_ui(trecho, prefixo, lista_trechos, materiais_combinados):
     trecho['nome'] = st.text_input("Nome do Trecho", value=trecho.get('nome'), key=f"nome_{prefixo}_{trecho['id']}")
     c1, c2, c3, c4 = st.columns(4)
@@ -245,22 +234,17 @@ def render_trecho_ui(trecho, prefixo, lista_trechos, materiais_combinados):
             trecho['acessorios'].pop(idx); st.rerun()
     c1, c2 = st.columns([3, 1]); c1.selectbox("Selecionar Acessório", options=list(K_FACTORS.keys()), key=f"selectbox_acessorio_{trecho['id']}"); c2.number_input("Qtd", min_value=1, value=1, step=1, key=f"quantidade_acessorio_{trecho['id']}")
     st.button("Adicionar Acessório", on_click=adicionar_acessorio, args=(trecho['id'], lista_trechos), key=f"btn_add_acessorio_{trecho['id']}", use_container_width=True)
-
 def adicionar_item(tipo_lista):
     novo_id = time.time()
     st.session_state[tipo_lista].append({"id": novo_id, "nome": "", "comprimento": 10.0, "diametro": 100.0, "material": "Aço Carbono (novo)", "acessorios": [], "perda_equipamento_m": 0.0})
-
 def remover_ultimo_item(tipo_lista):
     if len(st.session_state[tipo_lista]) > 0: st.session_state[tipo_lista].pop()
-
 def adicionar_ramal_paralelo():
     novo_nome_ramal = f"Ramal {len(st.session_state.ramais_paralelos) + 1}"
     novo_id = time.time()
     st.session_state.ramais_paralelos[novo_nome_ramal] = [{"id": novo_id, "nome": "", "comprimento": 50.0, "diametro": 80.0, "material": "Aço Carbono (novo)", "acessorios": [], "perda_equipamento_m": 0.0}]
-
 def remover_ultimo_ramal():
     if len(st.session_state.ramais_paralelos) > 1: st.session_state.ramais_paralelos.popitem()
-
 def adicionar_acessorio(id_trecho, lista_trechos):
     nome_acessorio = st.session_state[f"selectbox_acessorio_{id_trecho}"]
     quantidade = st.session_state[f"quantidade_acessorio_{id_trecho}"]
@@ -273,11 +257,8 @@ def adicionar_acessorio(id_trecho, lista_trechos):
 setup_database()
 
 # --- NOSSO NOVO SISTEMA DE AUTENTICAÇÃO ---
-
 def render_login_page():
-    """Renderiza os formulários de login e registro."""
     st.title("Plataforma de Análise de Redes Hidráulicas")
-    
     col1, col2 = st.columns([1.2, 1])
 
     with col1:
@@ -289,15 +270,24 @@ def render_login_page():
 
             if login_submitted:
                 user_data = get_user(username)
-                if user_data and user_data.get('password'):
-                    hashed_password_from_db = user_data['password'].encode('utf-8')
-                    if bcrypt.checkpw(password.encode('utf-8'), hashed_password_from_db):
-                        st.session_state['authentication_status'] = True
-                        st.session_state['username'] = user_data['username']
-                        st.session_state['name'] = user_data['name']
-                        st.rerun()
-                    else:
-                        st.error("Usuário ou senha incorreto.")
+                # --- LÓGICA DE LOGIN CORRIGIDA E ROBUSTA ---
+                if user_data and 'password' in user_data and user_data['password'] is not None:
+                    plain_password_bytes = password.encode('utf-8')
+                    hashed_password_from_db = user_data['password']
+                    
+                    if isinstance(hashed_password_from_db, str):
+                        hashed_password_from_db = hashed_password_from_db.encode('utf-8')
+                    
+                    try:
+                        if bcrypt.checkpw(plain_password_bytes, hashed_password_from_db):
+                            st.session_state['authentication_status'] = True
+                            st.session_state['username'] = user_data['username']
+                            st.session_state['name'] = user_data['name']
+                            st.rerun()
+                        else:
+                            st.error("Usuário ou senha incorreto.")
+                    except Exception as e:
+                        st.error(f"Erro ao verificar a senha: {e}. O hash no banco pode estar inválido.")
                 else:
                     st.error("Usuário ou senha incorreto.")
 
@@ -317,7 +307,6 @@ def render_login_page():
                 elif not all([new_username, new_name, new_email]):
                     st.error("Por favor, preencha todos os campos obrigatórios.")
                 else:
-                    # Criptografa a senha usando bcrypt
                     hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
                     if add_user(new_username, hashed_password, new_name, new_email):
                         st.success("Usuário registrado com sucesso! Por favor, faça o login.")
@@ -326,16 +315,12 @@ def render_login_page():
 
 
 # --- LÓGICA PRINCIPAL DA APLICAÇÃO ---
-
-# Verifica se o usuário está logado. Se não, mostra a página de login/registro.
 if not st.session_state.get('authentication_status'):
     render_login_page()
 else:
-    # Se o usuário está logado, executa a aplicação principal.
     name = st.session_state['name']
     username = st.session_state['username']
 
-    # INICIALIZAÇÃO DO st.session_state
     if 'trechos_succao' not in st.session_state: st.session_state.trechos_succao = []
     if 'trechos_antes' not in st.session_state: st.session_state.trechos_antes = []
     if 'trechos_depois' not in st.session_state: st.session_state.trechos_depois = []
@@ -360,11 +345,9 @@ else:
     user_materials = get_user_materials(username)
     materiais_combinados = {**MATERIAIS_PADRAO, **user_materials}
 
-    # --- INÍCIO DA SIDEBAR ---
     with st.sidebar:
         st.header(f"Bem-vindo(a), {name}!")
         if st.button("Logout"):
-            # Limpa o estado da sessão para fazer logout
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -537,7 +520,7 @@ else:
             c1, c2 = st.columns(2); c1.button("Adicionar Trecho (Depois)", on_click=adicionar_item, args=("trechos_depois",), use_container_width=True); c2.button("Remover Trecho (Depois)", on_click=remover_ultimo_item, args=("trechos_depois",), use_container_width=True)
         st.divider(); st.header("🔌 Equipamentos e Custo"); rend_motor = st.slider("Eficiência do Motor (%)", 1, 100, 90); horas_por_dia = st.number_input("Horas por Dia", 1.0, 24.0, 8.0, 0.5); tarifa_energia = st.number_input("Custo da Energia (R$/kWh)", 0.10, 5.00, 0.75, 0.01, format="%.2f")
 
-    # --- INÍCIO DO CORPO PRINCIPAL DA APLICAÇÃO ---
+    # --- CORPO PRINCIPAL DA APLICAÇÃO ---
     try:
         sistema_succao_atual = st.session_state.trechos_succao
         sistema_recalque_atual = {'antes': st.session_state.trechos_antes, 'paralelo': st.session_state.ramais_paralelos, 'depois': st.session_state.trechos_depois}
