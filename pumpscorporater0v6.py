@@ -12,10 +12,12 @@ from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 
 # Importando as funções do banco de dados e do gerador de relatórios
+
 from database import (
     setup_database, save_scenario, load_scenario, get_user_projects,
     get_scenarios_for_project, delete_scenario, add_user_fluid, get_user_fluids,
-    delete_user_fluid, add_user_material, get_user_materials, delete_user_material
+    delete_user_fluid, add_user_material, get_user_materials, delete_user_material,
+    add_user, get_all_users_for_auth # Adicione estas duas
 )
 from report_generator import generate_report
 
