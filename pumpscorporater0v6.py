@@ -53,25 +53,48 @@ def calcular_perda_serie(lista_trechos, vazao_m3h, fluido_selecionado, materiais
         perda_total += trecho.get('perda_equipamento_m', 0.0)
     return perda_total
 def calcular_perdas_trecho(trecho, vazao_m3h, fluido_selecionado, materiais_combinados, fluidos_combinados):
-    if vazao_m3h < 0: vazao_m3h = 0
+    # Garante compatibilidade se vazao_m3h vier como array do scipy
+    if hasattr(vazao_m3h, "__len__"): 
+         vazao_m3h = np.maximum(vazao_m3h, 0)
+    elif vazao_m3h < 0: 
+        vazao_m3h = 0
+
     rugosidade_mm = materiais_combinados[trecho["material"]]
     vazao_m3s, diametro_m = vazao_m3h / 3600, trecho["diametro"] / 1000
     nu = fluidos_combinados[fluido_selecionado]["nu"]
+    
     if diametro_m <= 0: return {"principal": 1e12, "localizada": 0, "velocidade": 0}
+    
     area = (math.pi * diametro_m**2) / 4
     velocidade = vazao_m3s / area if area > 0 else 0
     reynolds = (velocidade * diametro_m) / nu if nu > 0 else 0
+    
     fator_atrito = 0
-    if reynolds > 4000:
+    
+    # --- CORREÇÃO AQUI: Usamos np.any() e np.log10() para aceitar Arrays ---
+    if np.any(reynolds > 4000):
         rugosidade_m = rugosidade_mm / 1000
         if diametro_m <= 0: return {"principal": 1e12, "localizada": 0, "velocidade": 0}
-        log_term = math.log10((rugosidade_m / (3.7 * diametro_m)) + (5.74 / reynolds**0.9))
+        
+        # AQUI ESTAVA O ERRO: Substituímos math.log10 por np.log10
+        term_a = rugosidade_m / (3.7 * diametro_m)
+        term_b = 5.74 / (reynolds**0.9)
+        log_term = np.log10(term_a + term_b)
+        
         fator_atrito = 0.25 / (log_term**2)
-    elif reynolds > 0:
+        
+        # Ajuste fino para arrays mistos (caso raro, mas seguro)
+        if hasattr(reynolds, "__len__"):
+             fator_atrito = np.where(reynolds <= 4000, 64 / (reynolds + 1e-10), fator_atrito)
+        
+    elif np.any(reynolds > 0):
         fator_atrito = 64 / reynolds
+        
     perda_principal = fator_atrito * (trecho["comprimento"] / diametro_m) * (velocidade**2 / (2 * 9.81))
+    
     k_total_trecho = sum(ac["k"] * ac["quantidade"] for ac in trecho["acessorios"])
     perda_localizada = k_total_trecho * (velocidade**2 / (2 * 9.81))
+    
     return {"principal": perda_principal, "localizada": perda_localizada, "velocidade": velocidade}
 def calcular_perdas_paralelo(ramais, vazao_total_m3h, fluido_selecionado, materiais_combinados, fluidos_combinados):
     num_ramais = len(ramais)
@@ -121,22 +144,35 @@ def calcular_pressao_atm_mca(altitude_m, rho_fluido):
     return pressao_pa / (rho_fluido * 9.81)
 def encontrar_ponto_operacao(sistema_succao, sistema_recalque, h_estatica_total, fluido, func_curva_bomba, materiais_combinados, fluidos_combinados):
     def curva_sistema(vazao_m3h):
-        if vazao_m3h < 0: return h_estatica_total
+        # Extrai o valor escalar se for um array de 1 elemento (segurança extra)
+        v_check = vazao_m3h.item() if hasattr(vazao_m3h, "item") else vazao_m3h
+        
+        if v_check < 0: return h_estatica_total
+        
         perda_total_dinamica = 0
         perda_total_dinamica += calcular_perda_serie(sistema_succao, vazao_m3h, fluido, materiais_combinados, fluidos_combinados)
         perda_total_dinamica += calcular_perda_serie(sistema_recalque['antes'], vazao_m3h, fluido, materiais_combinados, fluidos_combinados)
+        
         perda_par, _ = calcular_perdas_paralelo(sistema_recalque['paralelo'], vazao_m3h, fluido, materiais_combinados, fluidos_combinados)
+        
         if perda_par == -1: return 1e12
         perda_total_dinamica += perda_par
         perda_total_dinamica += calcular_perda_serie(sistema_recalque['depois'], vazao_m3h, fluido, materiais_combinados, fluidos_combinados)
+        
         return h_estatica_total + perda_total_dinamica
+
     def erro(vazao_m3h):
-        if vazao_m3h < 0: return 1e12
+        v_check = vazao_m3h.item() if hasattr(vazao_m3h, "item") else vazao_m3h
+        if v_check < 0: return 1e12
         return func_curva_bomba(vazao_m3h) - curva_sistema(vazao_m3h)
+
+    # Cálculo da raiz (ponto de encontro das curvas)
     solucao = root(erro, 50.0, method='hybr', options={'xtol': 1e-8})
+    
     if solucao.success and solucao.x[0] > 1e-3:
-        vazao_op = solucao.x[0]
-        altura_op = func_curva_bomba(vazao_op)
+        # --- CORREÇÃO AQUI: Converter explicitamente para float do Python ---
+        vazao_op = float(solucao.x[0])
+        altura_op = float(func_curva_bomba(vazao_op))
         return vazao_op, altura_op, curva_sistema
     else:
         return None, None, curva_sistema
